@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hand Gesture Tracker</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0a0f;
+    color: #fff;
+    font-family: 'Courier New', monospace;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow: hidden;
+  }
+
+  h1 {
+    font-size: 1rem;
+    letter-spacing: 0.3em;
+    color: #00ff88;
+    padding: 10px 0 6px;
+    text-transform: uppercase;
+  }
+
+  #container {
+    position: relative;
+    width: 640px;
+    max-width: 100vw;
+    flex: 1;
+  }
+
+  video {
+    display: none;
+  }
+
+  canvas#output {
+    width: 100%;
+    height: 100%;
+    display: block;
+    border: 1px solid #1a1a2e;
+  }
+
+  /* Landmark name labels rendered on canvas - nothing extra needed */
+
+  /* Bottom info bar */
+  #info-bar {
+    width: 640px;
+    max-width: 100vw;
+    background: #0d0d1a;
+    border-top: 2px solid #00ff88;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-height: 64px;
+  }
+
+  #gesture-icon {
+    font-size: 2.2rem;
+    min-width: 44px;
+    text-align: center;
+    filter: drop-shadow(0 0 8px #00ff88aa);
+  }
+
+  #gesture-name {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #00ff88;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    min-width: 180px;
+  }
+
+  #gesture-desc {
+    font-size: 0.75rem;
+    color: #8888aa;
+    line-height: 1.4;
+  }
+
+  #finger-status {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+  }
+
+  .finger-dot {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.55rem;
+    color: #555577;
+    letter-spacing: 0.05em;
+  }
+
+  .finger-dot .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #222244;
+    border: 1px solid #334;
+    transition: background 0.1s, border-color 0.1s;
+  }
+
+  .finger-dot.up .dot {
+    background: #00ff88;
+    border-color: #00ff88;
+    box-shadow: 0 0 6px #00ff88;
+  }
+
+  .finger-dot.up {
+    color: #00ff88;
+  }
+
+  #no-hand {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    color: #444466;
+    pointer-events: none;
+  }
+
+  #no-hand .big { font-size: 3rem; }
+  #no-hand .msg { font-size: 0.8rem; letter-spacing: 0.2em; margin-top: 8px; }
+
+  #loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    color: #00ff88;
+  }
+  #loading .spinner {
+    width: 40px; height: 40px;
+    border: 3px solid #003322;
+    border-top-color: #00ff88;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<h1>✋ Hand Gesture Tracker</h1>
+
+<div id="container">
+  <video id="video" playsinline autoplay muted></video>
+  <canvas id="output"></canvas>
+  <div id="no-hand" style="display:none">
+    <div class="big">🖐</div>
+    <div class="msg">NO HAND DETECTED</div>
+  </div>
+  <div id="loading">
+    <div class="spinner"></div>
+    <div style="font-size:0.8rem;letter-spacing:0.2em">LOADING MEDIAPIPE…</div>
+  </div>
+</div>
+
+<div id="info-bar">
+  <div id="gesture-icon">—</div>
+  <div>
+    <div id="gesture-name">Waiting…</div>
+    <div id="gesture-desc">Show your hand to the camera</div>
+  </div>
+  <div id="finger-status">
+    <div class="finger-dot" id="dot-thumb"><div class="dot"></div>THUMB</div>
+    <div class="finger-dot" id="dot-index"><div class="dot"></div>INDEX</div>
+    <div class="finger-dot" id="dot-middle"><div class="dot"></div>MID</div>
+    <div class="finger-dot" id="dot-ring"><div class="dot"></div>RING</div>
+    <div class="finger-dot" id="dot-pinky"><div class="dot"></div>PINKY</div>
+  </div>
+</div>
+
+<!-- MediaPipe via CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+<script>
+// ── Landmark names (21 points) ──────────────────────────────────────────────
+const LANDMARK_NAMES = [
+  'WRIST',
+  'THUMB_CMC','THUMB_MCP','THUMB_IP','THUMB_TIP',
+  'INDEX_MCP','INDEX_PIP','INDEX_DIP','INDEX_TIP',
+  'MIDDLE_MCP','MIDDLE_PIP','MIDDLE_DIP','MIDDLE_TIP',
+  'RING_MCP','RING_PIP','RING_DIP','RING_TIP',
+  'PINKY_MCP','PINKY_PIP','PINKY_DIP','PINKY_TIP'
+];
+
+const LANDMARK_SHORT = [
+  'WRIST',
+  'T-CMC','T-MCP','T-IP','T-TIP',
+  'I-MCP','I-PIP','I-DIP','I-TIP',
+  'M-MCP','M-PIP','M-DIP','M-TIP',
+  'R-MCP','R-PIP','R-DIP','R-TIP',
+  'P-MCP','P-PIP','P-DIP','P-TIP'
+];
+
+// ── Gesture definitions ──────────────────────────────────────────────────────
+// Returns {name, icon, desc} given fingers array [thumb, index, middle, ring, pinky] (1=up/0=down)
+function recognizeGesture(fingers, landmarks) {
+  const [thumb, index, middle, ring, pinky] = fingers;
+  const sum = fingers.reduce((a, b) => a + b, 0);
+
+  if (sum === 5) return { name: 'OPEN HAND', icon: '🖐', desc: 'All fingers extended — Hello / Stop / High Five' };
+  if (sum === 0) return { name: 'FIST', icon: '✊', desc: 'All fingers closed — Power / Rock' };
+
+  if (!thumb && index && !middle && !ring && !pinky)
+    return { name: 'POINTING', icon: '☝️', desc: 'Index finger up — Point / Select' };
+
+  if (!thumb && index && middle && !ring && !pinky)
+    return { name: 'PEACE / VICTORY', icon: '✌️', desc: 'Index + Middle up — Peace / V sign' };
+
+  if (thumb && index && !middle && !ring && !pinky)
+    return { name: 'GUN / L-SHAPE', icon: '🤙', desc: 'Thumb + Index — Gun / L shape' };
+
+  if (thumb && !index && !middle && !ring && pinky)
+    return { name: 'HANG LOOSE', icon: '🤙', desc: 'Thumb + Pinky — Shaka / Hang loose' };
+
+  if (!thumb && index && middle && ring && pinky)
+    return { name: 'FOUR FINGERS', icon: '🖖', desc: 'Four fingers up — Number 4' };
+
+  if (thumb && index && middle && ring && !pinky)
+    return { name: 'FOUR (THUMB)', icon: '4️⃣', desc: 'Thumb + 3 fingers — Alternative 4' };
+
+  if (!thumb && !index && !middle && !ring && pinky)
+    return { name: 'PINKY UP', icon: '🤙', desc: 'Pinky extended — Promise / Pinky swear' };
+
+  if (thumb && !index && !middle && !ring && !pinky)
+    return { name: 'THUMBS UP', icon: '👍', desc: 'Thumb extended up — Like / Good / Approve' };
+
+  if (!thumb && !index && !middle && !ring && !pinky)
+    return { name: 'FIST', icon: '✊', desc: 'Closed fist — Power / Rock' };
+
+  if (thumb && index && middle && !ring && !pinky)
+    return { name: 'THREE', icon: '3️⃣', desc: 'Thumb + Index + Middle — Number 3' };
+
+  if (!thumb && index && !middle && !ring && pinky)
+    return { name: 'ROCK ON', icon: '🤘', desc: 'Index + Pinky up — Rock / Metal sign' };
+
+  if (thumb && index && middle && ring && pinky)
+    return { name: 'OPEN HAND', icon: '🖐', desc: 'All fingers extended — Hello / Stop' };
+
+  if (!thumb && !index && middle && ring && pinky)
+    return { name: 'THREE FINGERS', icon: '3️⃣', desc: 'Middle + Ring + Pinky up' };
+
+  if (thumb && !index && middle && ring && pinky)
+    return { name: 'OK-ISH', icon: '👌', desc: 'Thumb + Middle + Ring + Pinky' };
+
+  return { name: `CUSTOM (${fingers.join('')})`, icon: '🤚', desc: `Fingers: Thumb=${thumb} Idx=${index} Mid=${middle} Rng=${ring} Pnk=${pinky}` };
+}
+
+// ── Setup ────────────────────────────────────────────────────────────────────
+const video   = document.getElementById('video');
+const canvas  = document.getElementById('output');
+const ctx     = canvas.getContext('2d');
+const noHand  = document.getElementById('no-hand');
+const loading = document.getElementById('loading');
+
+const gestureIcon = document.getElementById('gesture-icon');
+const gestureName = document.getElementById('gesture-name');
+const gestureDesc = document.getElementById('gesture-desc');
+const fingerDots  = {
+  thumb:  document.getElementById('dot-thumb'),
+  index:  document.getElementById('dot-index'),
+  middle: document.getElementById('dot-middle'),
+  ring:   document.getElementById('dot-ring'),
+  pinky:  document.getElementById('dot-pinky'),
+};
+
+// ── Finger-up detection ──────────────────────────────────────────────────────
+function isFingerUp(lm, tipIdx, pipIdx) {
+  return lm[tipIdx].y < lm[pipIdx].y;
+}
+
+function isThumbUp(lm) {
+  // Compare tip x vs ip x (mirrored canvas)
+  return lm[4].x < lm[3].x;
+}
+
+function getFingers(lm) {
+  return [
+    isThumbUp(lm) ? 1 : 0,
+    isFingerUp(lm, 8, 6)  ? 1 : 0,
+    isFingerUp(lm, 12, 10) ? 1 : 0,
+    isFingerUp(lm, 16, 14) ? 1 : 0,
+    isFingerUp(lm, 20, 18) ? 1 : 0,
+  ];
+}
+
+// ── Draw ─────────────────────────────────────────────────────────────────────
+const CONNECTIONS = window.HAND_CONNECTIONS || [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [0,9],[9,10],[10,11],[11,12],
+  [0,13],[13,14],[14,15],[15,16],
+  [0,17],[17,18],[18,19],[19,20],
+  [5,9],[9,13],[13,17]
+];
+
+function drawHand(lm, w, h) {
+  // Draw connections
+  ctx.strokeStyle = '#00ff88';
+  ctx.lineWidth = 2.5;
+  for (const [a, b] of CONNECTIONS) {
+    ctx.beginPath();
+    ctx.moveTo(lm[a].x * w, lm[a].y * h);
+    ctx.lineTo(lm[b].x * w, lm[b].y * h);
+    ctx.stroke();
+  }
+
+  // Draw landmark dots + names
+  for (let i = 0; i < lm.length; i++) {
+    const x = lm[i].x * w;
+    const y = lm[i].y * h;
+
+    // Dot
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ff3355';
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Label background + text
+    const label = LANDMARK_SHORT[i];
+    ctx.font = 'bold 10px Courier New';
+    const tw = ctx.measureText(label).width;
+    const lx = x + 8;
+    const ly = y - 4;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(lx - 2, ly - 10, tw + 6, 14);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(label, lx + 1, ly);
+  }
+}
+
+// ── MediaPipe Hands ──────────────────────────────────────────────────────────
+let handDetected = false;
+
+const hands = new Hands({
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.5,
+});
+
+hands.onResults((results) => {
+  loading.style.display = 'none';
+
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // Mirror the canvas
+  ctx.save();
+  ctx.scale(-1, 1);
+  ctx.translate(-w, 0);
+  ctx.drawImage(results.image, 0, 0, w, h);
+  ctx.restore();
+
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    handDetected = true;
+    noHand.style.display = 'none';
+
+    const lm = results.multiHandLandmarks[0];
+
+    // Mirror landmarks for display (x → 1-x)
+    const mirroredLm = lm.map(p => ({ x: 1 - p.x, y: p.y, z: p.z }));
+
+    drawHand(mirroredLm, w, h);
+
+    const fingers = getFingers(lm);
+    const gesture = recognizeGesture(fingers, lm);
+
+    // Update UI
+    gestureIcon.textContent = gesture.icon;
+    gestureName.textContent = gesture.name;
+    gestureDesc.textContent = gesture.desc;
+
+    const keys = ['thumb','index','middle','ring','pinky'];
+    fingers.forEach((f, i) => {
+      const el = fingerDots[keys[i]];
+      el.classList.toggle('up', f === 1);
+    });
+
+  } else {
+    handDetected = false;
+    noHand.style.display = 'block';
+    gestureIcon.textContent = '—';
+    gestureName.textContent = 'NO HAND';
+    gestureDesc.textContent = 'Show your hand to the camera';
+    Object.values(fingerDots).forEach(el => el.classList.remove('up'));
+  }
+});
+
+// ── Camera ───────────────────────────────────────────────────────────────────
+const camera = new Camera(video, {
+  onFrame: async () => {
+    canvas.width  = video.videoWidth  || 640;
+    canvas.height = video.videoHeight || 480;
+    await hands.send({ image: video });
+  },
+  width: 640,
+  height: 480,
+});
+
+camera.start().catch(err => {
+  loading.innerHTML = `<div style="color:#ff3355;font-size:0.8rem">CAM ERROR: ${err.message}</div>`;
+});
+</script>
+</body>
+</html>
